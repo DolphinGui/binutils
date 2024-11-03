@@ -28,6 +28,8 @@
 #include "elf/avr.h"
 #include "elf32-avr.h"
 
+#define FAIL (-1)
+
 /* For building a linked list of AVR_PROPERTY_RECORD structures.  */
 struct avr_property_record_link
 {
@@ -483,12 +485,36 @@ const char FLT_CHARS[] = "dD";
 
 static void avr_set_arch (int);
 
+/* Unwind stuff */
+static void create_unwind_entry (void);
+static void s_avr_unwind_fnstart(int);
+static void s_avr_unwind_fnend (int);
+static void finish_unwind_opcodes (void);
+static void flush_pending_unwind (void);
+static void add_unwind_adjustsp (offsetT);
+static void add_unwind_opcode (valueT op);
+static void s_avr_unwind_pad (int);
+static void s_avr_unwind_save (int);
+static void s_avr_unwind_personality (int);
+static void s_avr_unwind_setfp(int);
+static void s_arm_unwind_cantunwind(int);
+static void s_avr_unwind_handlerdata (int);
+
 /* The target specific pseudo-ops which we support.  */
 const pseudo_typeS md_pseudo_table[] =
 {
   {"arch", avr_set_arch,	0},
+  { "fnstart",    s_avr_unwind_fnstart, 0 },
+  { "fnend",    s_avr_unwind_fnend, 0 },
+  { "cantunwind", s_arm_unwind_cantunwind, 0 },
+  { "save",   s_avr_unwind_save,  0 },
+  { "pad",    s_avr_unwind_pad, 0 },
+  { "setfp",    s_avr_unwind_setfp, 0 },
+  { "handlerdata",  s_avr_unwind_handlerdata, 0 },
+  { "personality",  s_avr_unwind_personality, 0 },
   { NULL,	NULL,		0}
 };
+
 
 #define LDI_IMMEDIATE(x) (((x) & 0xf) | (((x) << 4) & 0xf00))
 
@@ -2846,3 +2872,431 @@ avr_fix_adjustable (struct fix *fixp)
 
   return true;
 }
+
+
+
+static struct
+{
+  symbolS *   proc_start;
+  symbolS *   table_entry;
+  symbolS *   personality_routine;
+  symbolS *   personality_data;
+  /* The segment containing the function.  */
+  segT      saved_seg;
+  subsegT   saved_subseg;
+  /* Opcodes generated from this function.  */
+  unsigned char * opcodes;
+  int     opcode_count;
+  int     opcode_alloc;
+  /* The number of bytes pushed to the stack.  */
+  offsetT   frame_size;
+  /* We don't add stack adjustment opcodes immediately so that we can merge
+     multiple adjustments.  We can also omit the final adjustment
+     when using a frame pointer.  */
+  offsetT   pending_offset;
+  /* These two fields are set by both unwind_movsp and unwind_setfp.  They
+     hold the reg+offset to use when restoring sp from a frame pointer.  */
+  offsetT   fp_offset;
+  int     fp_reg;
+  /* Nonzero if an unwind_setfp directive has been seen.  */
+  unsigned    fp_used:1;
+  /* Nonzero if the last opcode restores sp from fp_reg.  */
+  unsigned    sp_restored:1;
+  unsigned cant_unwind: 1;
+} unwind;
+
+
+static void
+flush_pending_unwind (void)
+{
+  offsetT offset;
+
+  offset = unwind.pending_offset;
+  unwind.pending_offset = 0;
+  if (offset != 0)
+    add_unwind_adjustsp (offset);
+}
+
+static void
+add_unwind_adjustsp (offsetT offset)
+{
+  if(offset == 0) return;
+  while(offset >= 0x7F) {
+    add_unwind_opcode(0x7f);
+    offset -= 0x7f;
+  }
+  add_unwind_opcode(offset);
+}
+
+static void
+finish_unwind_opcodes (void)
+{
+  flush_pending_unwind ();
+}
+
+static int
+immediate_for_directive (int *val)
+{
+  expressionS exp;
+  exp.X_op = O_illegal;
+
+  expression (&exp);
+
+  if (exp.X_op != O_constant)
+    {
+      as_bad (_("expected a constant"));
+      ignore_rest_of_line ();
+      return FAIL;
+    }
+  *val = exp.X_add_number;
+  return 0;
+}
+
+static void
+start_unwind_section (const segT text_seg, int idx)
+{
+  const char * text_name;
+  const char * prefix;
+  const char * prefix_once;
+  struct elf_section_match match;
+  char * sec_name;
+  int type;
+  int flags;
+  int linkonce;
+
+  if (idx)
+    {
+      prefix = ELF_STRING_AVR_unwind_info;
+      prefix_once = ELF_STRING_AVR_unwind_info_once;
+      type = SHT_PROGBITS;
+    }
+  else
+    {
+      prefix = ELF_STRING_AVR_unwind_data;
+      prefix_once = ELF_STRING_AVR_unwind_data_once;
+      type = SHT_PROGBITS;
+    }
+
+  text_name = segment_name (text_seg);
+  if (strcmp (text_name, ".text") == 0)
+    text_name = "";
+
+  if (startswith (text_name, ".gnu.linkonce.t."))
+    {
+      prefix = prefix_once;
+      text_name += strlen (".gnu.linkonce.t.");
+    }
+
+  sec_name = concat (prefix, text_name, (char *) NULL);
+
+  flags = SHF_ALLOC;
+  linkonce = 0;
+  memset (&match, 0, sizeof (match));
+
+  /* Handle COMDAT group.  */
+  if (prefix != prefix_once && (text_seg->flags & SEC_LINK_ONCE) != 0)
+    {
+      match.group_name = elf_group_name (text_seg);
+      if (match.group_name == NULL)
+  {
+    as_bad (_("Group section `%s' has no group signature"),
+      segment_name (text_seg));
+    ignore_rest_of_line ();
+    return;
+  }
+      flags |= SHF_GROUP;
+      linkonce = 1;
+    }
+
+  obj_elf_change_section (sec_name, type, flags, 0, &match,
+        linkonce);
+
+  /* Set the section link for index tables.  */
+  if (idx)
+    elf_linked_to_section (now_seg) = text_seg;
+}
+
+static void
+add_unwind_opcode (valueT op)
+{
+  /* Add any deferred stack adjustment.  */
+  if (unwind.pending_offset)
+    flush_pending_unwind ();
+
+  unwind.sp_restored = 0;
+
+  if (unwind.opcode_count + 1 > unwind.opcode_alloc)
+    {
+      unwind.opcode_alloc += 16;
+      if (unwind.opcodes)
+  unwind.opcodes = XRESIZEVEC (unsigned char, unwind.opcodes,
+             unwind.opcode_alloc);
+      else
+  unwind.opcodes = XNEWVEC (unsigned char, unwind.opcode_alloc);
+    }
+  unwind.opcodes[unwind.opcode_count] = op;
+  unwind.opcode_count++;
+    
+}
+
+static void
+s_avr_unwind_pad (int ignored ATTRIBUTE_UNUSED)
+{
+  int offset;
+
+  if (!unwind.proc_start)
+    as_bad (_("missing .fnstart before unwinding directive"));
+
+  if (immediate_for_directive (&offset) == FAIL)
+    return;
+
+  /* Don't generate any opcodes, just record the details for later.  */
+  unwind.frame_size += offset;
+  unwind.pending_offset += offset;
+
+  demand_empty_rest_of_line ();
+}
+
+static void s_avr_unwind_setfp(int ignored ATTRIBUTE_UNUSED){
+  if (!unwind.proc_start)
+    as_bad (_("missing .fnstart before unwinding directive"));
+
+  if (immediate_for_directive (&unwind.fp_reg) == FAIL)
+    return;
+  demand_empty_rest_of_line ();
+}
+
+static int
+avr_parse_reg (char **ccp)
+{
+  char *start = *ccp;
+  char *p;
+  int reg = 0;
+
+  start = skip_space (start);
+
+  if (*start == 'r')
+    start++;
+#ifdef OPTIONAL_REGISTER_PREFIX
+  if (*start == OPTIONAL_REGISTER_PREFIX)
+    start++;
+#endif
+
+  reg = strtoul(start, &p, 10);
+  if(p == start) return -1;
+
+  *ccp = p;
+  return reg;
+}
+
+static char is_callee_saved(unsigned reg){
+  if(specified_mcu.isa == AVR_ISA_AVRTINY){
+    if(reg < 18) return 0;
+    if(reg > 19 && reg < 28) return 0;
+    if(reg > 29) return 0;
+    return 1;
+  }
+
+  if(reg <= 1) return 0;
+  if(reg >= 18 && reg <= 27) return 0;
+  if(reg >= 30) return 0;
+  return 1;
+}
+
+static void
+s_avr_unwind_save (int ignored ATTRIBUTE_UNUSED)
+{
+  if(unwind.cant_unwind)
+    return;
+  int reg;
+
+  flush_pending_unwind();
+
+  if (!unwind.proc_start)
+    as_bad (_("Missing .fnstart"));
+
+  /* Figure out what sort of save we have.  */
+
+  reg = avr_parse_reg (&input_line_pointer);
+
+  if(reg == -1)
+    as_bad (_("Invalid register constant"));
+
+  if(!is_callee_saved(reg)){
+    fprintf(stderr, "invalid reg: %u\n", reg);
+    as_bad (_("Cannot save call-clobbered register"));
+  }
+
+  if (reg < 18) {
+    reg -= 2;
+  } else {
+    reg -= 12;
+  }
+
+  add_unwind_opcode(reg | 0x80);
+}
+
+
+static void
+s_avr_unwind_personality (int ignored ATTRIBUTE_UNUSED)
+{
+  char *name, *p, c;
+
+  if (!unwind.proc_start)
+    as_bad (_("Missing .fnstart"));
+
+  if (unwind.personality_routine)
+    as_bad (_("duplicate .personality directive"));
+
+  c = get_symbol_name (& name);
+  p = input_line_pointer;
+  if (c == '"')
+    ++ input_line_pointer;
+  unwind.personality_routine = symbol_find_or_make (name);
+  *p = c;
+  demand_empty_rest_of_line ();
+}
+
+
+static void
+s_avr_unwind_handlerdata (int ignored ATTRIBUTE_UNUSED)
+{
+  demand_empty_rest_of_line ();
+  if (!unwind.proc_start)
+    as_bad (_("Missing .fnstart directive"));
+
+  if (unwind.personality_data)
+    as_bad (_("duplicate .handlerdata directive"));
+
+  unwind.personality_data = expr_build_dot();
+}
+
+
+static void s_arm_unwind_cantunwind(int){
+  unwind.cant_unwind = 1;
+  demand_empty_rest_of_line ();
+}
+
+static void
+create_unwind_entry ()
+{
+  char *ptr;
+
+  finish_unwind_opcodes ();
+
+  /* Remember the current text section.  */
+  unwind.saved_seg = now_seg;
+  unwind.saved_subseg = now_subseg;
+
+  start_unwind_section (now_seg, 0);
+
+  unwind.table_entry = expr_build_dot ();
+
+  ptr = frag_more (unwind.opcode_count);
+  memcpy(ptr, unwind.opcodes, unwind.opcode_count);
+}
+
+static void
+s_avr_unwind_fnstart (int ignored ATTRIBUTE_UNUSED)
+{
+  demand_empty_rest_of_line ();
+  if (unwind.proc_start)
+    {
+      as_bad (_("duplicate .fnstart directive"));
+      return;
+    }
+
+  /* Mark the start of the function.  */
+  unwind.proc_start = expr_build_dot ();
+
+  /* Reset the rest of the unwind info.  */
+  unwind.opcode_count = 0;
+  unwind.table_entry = NULL;
+  unwind.personality_routine = NULL;
+  unwind.personality_data = NULL;
+  unwind.frame_size = 0;
+  unwind.fp_offset = 0;
+  unwind.fp_reg = 0;
+  unwind.fp_used = 0;
+  unwind.sp_restored = 0;
+  unwind.cant_unwind = 0;
+}
+
+
+
+static void
+s_avr_unwind_fnend (int ignored ATTRIBUTE_UNUSED)
+{
+  long where;
+  char *ptr;
+
+  symbolS* function_end = expr_build_dot ();
+  demand_empty_rest_of_line ();
+
+  if (!unwind.proc_start)
+    {
+      as_bad (_(".fnend directive without .fnstart"));
+      return;
+    }
+
+  if(unwind.cant_unwind && ! unwind.personality_data){
+    goto end;
+  }
+
+
+  create_unwind_entry();
+
+  /* Add index table entry.  This is two words.  */
+  start_unwind_section (unwind.saved_seg, 1);
+
+  ptr = frag_more (12);
+  memset (ptr, 0, 12);
+  where = frag_now_fix () - 12;
+
+  symbolS* unwind_begin = expr_build_dot ();
+
+  /* function start.  */
+  fix_new (frag_now, where, 2, unwind.proc_start, 0, 0,
+     BFD_RELOC_AVR_16_PM);
+  /* function end */
+  fix_new (frag_now, where + 2, 2, function_end, 0, 0,
+     BFD_RELOC_AVR_16_PM);
+
+    /* offset of the table entry.  */
+  if(! unwind.cant_unwind){
+  fix_new (frag_now, where + 4, 2, unwind.table_entry, 0, 0,
+     BFD_RELOC_16);
+  }else{
+    ptr[4] = 0xff;
+    ptr[5] = 0xff;
+  }
+
+  // length of section
+  ptr[6] = unwind.fp_reg;
+  if(unwind.opcode_count > 255)
+    as_bad(_("fae_data section is too large!"));
+  ptr[7] = unwind.opcode_count;
+
+  if(unwind.personality_data){
+    fix_new (frag_now, where + 8, 1, unwind.personality_data, 0, 0,
+       BFD_RELOC_16);
+  }
+
+  if(unwind.personality_routine){
+  fix_new (frag_now, where + 10, 2, unwind.personality_routine, 0, 0,
+     BFD_RELOC_AVR_16_PM);
+
+  }
+
+
+  /* Restore the original section.  */
+  subseg_set (unwind.saved_seg, unwind.saved_subseg);
+
+  // indicate to linker script that function depends on section
+  fix_new (frag_now, 0, 0, unwind_begin, 0, 0,
+     BFD_RELOC_NONE);
+
+end:
+  unwind.proc_start = NULL;
+}
+

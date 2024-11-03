@@ -206,7 +206,6 @@ SECTIONS
     *libc.a:*(.progmem.data)
 
     *(.progmem.*)
-
     . = ALIGN(2);
 
     /* For code that needs to reside in the lower 128k progmem.  */
@@ -282,7 +281,16 @@ SECTIONS
     *(.jumptables)
     *(.jumptables*)
 
-    _etext = . ;}
+    _etext = .;
+    PROVIDE (__lsda_begin = .) ; 
+    *(.gcc_except_table)
+    *(.gcc_except_table.*)
+    PROVIDE (__fae_table_start = .) ;
+    *(.fae_info)
+    *(.fae_info.*)
+    PROVIDE (__fae_table_stop = .) ; ;}
+    *(.fae_data)
+    *(.fae_data.*)
   } ${RELOCATING+ > text}
 EOF
 

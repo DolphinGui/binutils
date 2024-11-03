@@ -49,6 +49,13 @@
 #define E_AVR_MACH_XMEGA6  106
 #define E_AVR_MACH_XMEGA7  107
 
+/* EH section names */
+#define ELF_STRING_AVR_unwind_info           ".fae_info"
+#define ELF_STRING_AVR_unwind_data           ".fae_data"
+#define ELF_STRING_AVR_unwind_info_once      ".gnu.linkonce.fae_info."
+#define ELF_STRING_AVR_unwind_data_once      ".gnu.linkonce.fae_data."
+
+
 /* Relocations.  */
 START_RELOC_NUMBERS (elf_avr_reloc_type)
      RELOC_NUMBER (R_AVR_NONE,			0)
