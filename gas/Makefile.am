@@ -77,6 +77,7 @@ GAS_CFILES = \
 	ecoff.c \
 	ehopt.c \
 	expr.c \
+	faegen.c \
 	flonum-copy.c \
 	flonum-konst.c \
 	flonum-mult.c \
@@ -118,6 +119,7 @@ HFILES = \
 	emul-target.h \
 	emul.h \
 	expr.h \
+	faegen.h \
 	flonum.h \
 	frags.h \
 	gen-sframe.h \

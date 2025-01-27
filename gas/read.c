@@ -43,6 +43,7 @@
 #include "wchar.h"
 #include "filenames.h"
 #include "ginsn.h"
+#include "faegen.h"
 
 #include <limits.h>
 
@@ -593,6 +594,10 @@ pop_insert (const pseudo_typeS *table)
 #define scfi_pop_insert()	pop_insert(scfi_pseudo_table)
 #endif
 
+#ifndef fae_pop_insert
+#define fae_pop_insert() pop_insert(fae_pseudo_table)
+#endif
+
 static void
 pobegin (void)
 {
@@ -625,6 +630,9 @@ pobegin (void)
       pop_table_name = "cfi";
       cfi_pop_insert ();
     }
+
+  pop_table_name = "fae";
+  fae_pop_insert(); 
 }
 
 static void
