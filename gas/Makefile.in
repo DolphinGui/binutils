@@ -171,7 +171,7 @@ am__objects_1 = app.$(OBJEXT) as.$(OBJEXT) atof-generic.$(OBJEXT) \
 	codeview.$(OBJEXT) compress-debug.$(OBJEXT) cond.$(OBJEXT) \
 	depend.$(OBJEXT) dwarf2dbg.$(OBJEXT) dw2gencfi.$(OBJEXT) \
 	ecoff.$(OBJEXT) ehopt.$(OBJEXT) expr.$(OBJEXT) \
-	flonum-copy.$(OBJEXT) flonum-konst.$(OBJEXT) \
+	faegen.$(OBJEXT) flonum-copy.$(OBJEXT) flonum-konst.$(OBJEXT) \
 	flonum-mult.$(OBJEXT) frags.$(OBJEXT) gen-sframe.$(OBJEXT) \
 	ginsn.$(OBJEXT) hash.$(OBJEXT) input-file.$(OBJEXT) \
 	input-scrub.$(OBJEXT) listing.$(OBJEXT) literal.$(OBJEXT) \
@@ -513,6 +513,7 @@ pdfdir = @pdfdir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
+runstatedir = @runstatedir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
@@ -577,6 +578,7 @@ GAS_CFILES = \
 	ecoff.c \
 	ehopt.c \
 	expr.c \
+	faegen.c \
 	flonum-copy.c \
 	flonum-konst.c \
 	flonum-mult.c \
@@ -617,6 +619,7 @@ HFILES = \
 	emul-target.h \
 	emul.h \
 	expr.h \
+	faegen.h \
 	flonum.h \
 	frags.h \
 	gen-sframe.h \
@@ -1336,6 +1339,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ecoff.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ehopt.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/expr.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/faegen.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flonum-copy.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flonum-konst.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flonum-mult.Po@am__quote@

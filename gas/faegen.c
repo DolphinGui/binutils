@@ -48,7 +48,7 @@ static void emit_location(symbolS **out, const char *name) {
     as_bad(_("Missing .fae_start"));
   }
 
-  if (!(*out)) {
+  if (*out) {
     as_bad(_("Duplicate %s directive"), name);
   }
 

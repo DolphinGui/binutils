@@ -15536,6 +15536,7 @@ md_apply_fix (fixS *fixP, valueT *valP, segT seg ATTRIBUTE_UNUSED)
 
       case BFD_RELOC_VTABLE_INHERIT:
       case BFD_RELOC_VTABLE_ENTRY:
+      case BFD_RELOC_NONE:
 	fixP->fx_done = 0;
 	return;
 
@@ -17303,6 +17304,7 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
 			    fixp->fx_size);
 	      code = BFD_RELOC_32;
 	      break;
+	    case 0: code = BFD_RELOC_NONE; break;
 	    case 1: code = BFD_RELOC_8;  break;
 	    case 2: code = BFD_RELOC_16; break;
 	    case 4: code = BFD_RELOC_32; break;
