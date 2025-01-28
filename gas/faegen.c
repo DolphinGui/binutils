@@ -61,6 +61,7 @@ static void emit_location(symbolS **out, const char *name) {
   demand_empty_rest_of_line();
 }
 
+// TODO: make unwinder accept offset so registers_allocated can be removed
 void dot_fae_unwinder(int s ATTRIBUTE_UNUSED) {
   emit_location(&unwind.unwinder, "fae_unwinder");
 }
