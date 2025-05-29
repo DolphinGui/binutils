@@ -28,9 +28,9 @@ extern const pseudo_typeS fae_pseudo_table[];
 
 extern void fae_finish (void);
 
-#define FAE_TBL_SECTION ".fae1_table" 
+#define FAE_TBL_SECTION ".fae.table" 
 
-#define FAE_TBL_SECTION_ONCE ".fae1_table" 
+#define FAE_TBL_SECTION_ONCE ".fae.table" 
 
 // define FAE_PTR_RELOC_TYPE to specify a relocation type for function pointers
 

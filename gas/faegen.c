@@ -1,38 +1,33 @@
 #include "as.h"
 #include "faegen.h"
+#include "read.h"
 #include <stdint.h>
 
 typedef struct {
   symbolS *proc_start;
-  symbolS *unwinder;
-  symbolS *personality_routine;
+  expressionS *unwinder;
   symbolS *personality_data;
-  int registers_allocated;
-  int stack_usage;
-  int fp;
+  unsigned int stack;
   int done;
+  char dynamic_stack;
 } _unwind;
 
 static _unwind unwind;
 
 static void dot_fae_start(int);
 static void dot_fae_unwinder(int);
-static void dot_fae_personality(int);
 static void dot_fae_handlerdata(int);
-static void dot_fae_push(int);
-static void dot_fae_allocate(int);
-static void dot_fae_setfp(int);
 static void dot_fae_end(int);
+static void dot_fae_stacksize(int);
+static void dot_fae_save_sp(int);
 
 const pseudo_typeS fae_pseudo_table[] = {
     {"fae_start", dot_fae_start, 0},
     {"fae_end", dot_fae_end, 0},
     {"fae_unwinder", dot_fae_unwinder, 0},
-    {"fae_personality", dot_fae_personality, 0},
     {"fae_handlerdata", dot_fae_handlerdata, 0},
-    {"fae_push", dot_fae_push, 0},
-    {"fae_allocate", dot_fae_allocate, 0},
-    {"fae_setfp", dot_fae_setfp, 0},
+    {"fae_stacksize", dot_fae_stacksize, 0},
+    {"fae_save_sp", dot_fae_save_sp, 0},
     {NULL, 0, 0}};
 
 void dot_fae_start(int s ATTRIBUTE_UNUSED) {
@@ -42,53 +37,35 @@ void dot_fae_start(int s ATTRIBUTE_UNUSED) {
   demand_empty_rest_of_line();
 }
 
-static void emit_location(symbolS **out, const char *name) {
-  char *symbol;
+static void check_proc(void) {
   if (!unwind.proc_start) {
     as_bad(_("Missing .fae_start"));
-  }
-
-  if (*out) {
-    as_bad(_("Duplicate %s directive"), name);
   }
 
   if (unwind.done) {
     as_bad(_("Directive is outside of function"));
   }
-
-  get_symbol_name(&symbol);
-  *out = symbol_find_or_make(symbol);
-  demand_empty_rest_of_line();
 }
 
 // TODO: make unwinder accept offset so registers_allocated can be removed
 void dot_fae_unwinder(int s ATTRIBUTE_UNUSED) {
-  emit_location(&unwind.unwinder, "fae_unwinder");
+  check_proc();
+  if (unwind.unwinder)
+    as_bad(_("Duplicate .fae_unwinder directive"));
+  unwind.unwinder = XNEW(struct expressionS);
+  do_parse_cons_expression(unwind.unwinder, 4);
 }
 
 void dot_fae_handlerdata(int s ATTRIBUTE_UNUSED) {
-  emit_location(&unwind.personality_data, "fae_handlerdata");
-}
-
-void dot_fae_personality(int s ATTRIBUTE_UNUSED) {
-  emit_location(&unwind.personality_routine, "fae_personality");
-}
-
-void dot_fae_push(int s ATTRIBUTE_UNUSED) {
-  if (!unwind.proc_start) {
-    as_bad(_("Missing .fae_start"));
-  }
-
-  if (unwind.done) {
-    as_bad(_("fae_push directive is outside of function"));
-  }
-
-  unwind.registers_allocated += 1;
+  check_proc();
+  char *symbol;
+  get_symbol_name(&symbol);
+  unwind.personality_data = symbol_find_or_make(symbol);
   demand_empty_rest_of_line();
 }
 
 // stolen from tc-arm, might be better to move somewhere else
-static int immediate_for_directive(int *val) {
+static int immediate_for_directive(unsigned *val) {
   expressionS exp;
   exp.X_op = O_illegal;
 
@@ -99,40 +76,26 @@ static int immediate_for_directive(int *val) {
     ignore_rest_of_line();
     return -1;
   }
+  if(exp.X_add_number < 0)
+    as_bad(_("Expression is out of bounds"));
   *val = exp.X_add_number;
   return 0;
 }
 
-void dot_fae_allocate(int s ATTRIBUTE_UNUSED) {
-  if (!unwind.proc_start) {
-    as_bad(_("Missing .fae_start"));
-  }
 
-  if (unwind.done) {
-    as_bad(_("fae_allocate directive is outside of function"));
-  }
-
-  if (unwind.stack_usage != 0) {
-    as_bad(_("Duplicate fae_allocate directive"));
-  }
-
-  immediate_for_directive(&unwind.stack_usage);
+void dot_fae_stacksize(int s ATTRIBUTE_UNUSED){
+  check_proc();
+  if (unwind.dynamic_stack)
+    as_bad(_("Cannot set stack size for function with dynamic stack"));
+  immediate_for_directive(&unwind.stack);
 }
 
-void dot_fae_setfp(int s ATTRIBUTE_UNUSED) {
-  if (!unwind.proc_start) {
-    as_bad(_("Missing .fae_start"));
-  }
-
-  if (unwind.done) {
-    as_bad(_("fae_allocate directive is outside of function"));
-  }
-
-  if (unwind.stack_usage != 0) {
-    as_bad(_("Duplicate fae_setfp directive"));
-  }
-
-  immediate_for_directive(&unwind.fp);
+void dot_fae_save_sp(int s ATTRIBUTE_UNUSED){
+  check_proc();
+  if (unwind.stack != 0)
+    as_bad(_("Cannot set stack pointer register for function with fixed stack"));
+  immediate_for_directive(&unwind.stack);
+  unwind.stack |= 1 << 31; // todo make this architecture-generic
 }
 
 static void start_unwind_section(const segT text_seg) {
@@ -164,7 +127,6 @@ static int reloc_type(int ptr_size) {
 #ifdef FAE_PTR_RELOC_TYPE
   return FAE_PTR_RELOC_TYPE;
 #endif
-
   switch (ptr_size) {
   case 64:
     return BFD_RELOC_64;
@@ -181,32 +143,9 @@ static int reloc_type(int ptr_size) {
   }
 }
 
-static void write_constant(char *ptr, int size, int n) {
-  switch (size) {
-  case 64:
-    *((uint64_t *)(ptr)) = n;
-    break;
-  case 32:
-    *((uint32_t *)(ptr)) = n;
-    break;
-  case 16:
-    *((uint16_t *)(ptr)) = n;
-    break;
-  case 8:
-    *((uint8_t *)(ptr)) = n;
-    break;
-  default:
-    as_fatal(_("Could not write a valid size in fae table"));
-  }
-}
-
 void dot_fae_end(int s ATTRIBUTE_UNUSED) {
-
   long where;
   char *ptr;
-  int register_size =
-      stdoutput->arch_info->bits_per_word / stdoutput->arch_info->bits_per_byte;
-
   int ptr_size = stdoutput->arch_info->bits_per_address /
                  stdoutput->arch_info->bits_per_byte;
 
@@ -216,21 +155,22 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   if (unwind.done) {
     as_bad(_("Duplicate fae_end directive"));
   }
-
-  unwind.stack_usage += register_size * unwind.registers_allocated;
+  if (!unwind.unwinder){
+    as_bad(_("No unwind routine specified!"));
+  }
 
   symbolS *proc_end = expr_build_dot();
   demand_empty_rest_of_line();
 
   segT text = now_seg;
-  subsegT subtext = now_subseg;
+  int subseg = now_subseg;  
 
   start_unwind_section(text);
   symbolS *unwind_begin = expr_build_dot();
 
-  int len = register_size * 2 + ptr_size * 5;
+  int len = ptr_size * 5;
   ptr = frag_more(len);
-  where = frag_now_fix() - len;
+  where = 0;
 
   int type = reloc_type(ptr_size);
 
@@ -238,25 +178,26 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   fix_new(frag_now, where, ptr_size, unwind.proc_start, 0, 0, type);
   where += ptr_size;
   fix_new(frag_now, where, ptr_size, proc_end, 0, 0, type);
+  where += ptr_size; 
+  memcpy(ptr + where, &unwind.stack, sizeof(unwind.stack));
   where += ptr_size;
-  fix_new(frag_now, where, ptr_size, unwind.unwinder, 0, 0, type);
+  fix_new_exp(frag_now, where, ptr_size, unwind.unwinder, 0, type);
   where += ptr_size;
-  write_constant(ptr + where, register_size, unwind.registers_allocated);
-  where += register_size;
-  write_constant(ptr + where, register_size, unwind.fp);
-  where += register_size;
-
-  if (unwind.personality_routine) {
-    fix_new(frag_now, where, ptr_size, unwind.personality_routine, 0, 0, type);
-    where += ptr_size;
-    if (!unwind.personality_data) {
-      as_bad(_("No fae_personality_data to match with personality routine"));
-    }
+  
+  if (unwind.personality_data) {
     fix_new(frag_now, where, ptr_size, unwind.personality_data, 0, 0, type);
     where += ptr_size;
   }
-  /* Restore the original section.  */
-  subseg_set(text_section, subtext);
+
+  if(where > len){
+    as_bad(_("Internal faegen allocation error"));
+  }
+  
+  /* Restore the original section. This is definitely not how you're supposed to do it, but
+   * for some reason on ffunction-sections, set_subseg() sets it to .text instead of .text.function
+   * Todo investigate how that's supposed to work */
+  now_seg = text;
+  now_subseg = subseg;
 
   // indicate to linker script that function depends on section
   fix_new(frag_now, 0, 0, unwind_begin, 0, 0, BFD_RELOC_NONE);
