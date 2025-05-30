@@ -1,5 +1,6 @@
 #include "as.h"
 #include "faegen.h"
+#include "frags.h"
 #include "read.h"
 #include <stdint.h>
 
@@ -76,29 +77,29 @@ static int immediate_for_directive(unsigned *val) {
     ignore_rest_of_line();
     return -1;
   }
-  if(exp.X_add_number < 0)
+  if (exp.X_add_number < 0)
     as_bad(_("Expression is out of bounds"));
   *val = exp.X_add_number;
   return 0;
 }
 
-
-void dot_fae_stacksize(int s ATTRIBUTE_UNUSED){
+void dot_fae_stacksize(int s ATTRIBUTE_UNUSED) {
   check_proc();
   if (unwind.dynamic_stack)
     as_bad(_("Cannot set stack size for function with dynamic stack"));
   immediate_for_directive(&unwind.stack);
 }
 
-void dot_fae_save_sp(int s ATTRIBUTE_UNUSED){
+void dot_fae_save_sp(int s ATTRIBUTE_UNUSED) {
   check_proc();
   if (unwind.stack != 0)
-    as_bad(_("Cannot set stack pointer register for function with fixed stack"));
+    as_bad(
+        _("Cannot set stack pointer register for function with fixed stack"));
   immediate_for_directive(&unwind.stack);
   unwind.stack |= 1 << 31; // todo make this architecture-generic
 }
 
-static void start_unwind_section(const segT text_seg) {
+static void start_table_section(const segT text_seg) {
   const char *text_name;
   const char *prefix;
   struct elf_section_match match;
@@ -112,6 +113,31 @@ static void start_unwind_section(const segT text_seg) {
 
   if (startswith(text_name, ".gnu.linkonce.t.")) {
     prefix = FAE_TBL_SECTION_ONCE;
+    text_name += strlen(".gnu.linkonce.t.");
+  }
+
+  sec_name = concat(prefix, text_name, (char *)NULL);
+
+  flags = SHF_ALLOC;
+  memset(&match, 0, sizeof(match));
+
+  obj_elf_change_section(sec_name, SHT_PROGBITS, flags, 0, &match, linkonce);
+}
+
+static void start_data_section(const segT text_seg) {
+  const char *text_name;
+  const char *prefix;
+  struct elf_section_match match;
+  char *sec_name;
+  int flags;
+  int linkonce = 0;
+  text_name = segment_name(text_seg);
+  prefix = FAE_DATA_SECTION;
+  if (strcmp(text_name, ".text") == 0)
+    text_name = "";
+
+  if (startswith(text_name, ".gnu.linkonce.t.")) {
+    prefix = FAE_DATA_SECTION_ONCE;
     text_name += strlen(".gnu.linkonce.t.");
   }
 
@@ -143,9 +169,11 @@ static int reloc_type(int ptr_size) {
   }
 }
 
+static void emit_table(const segT text, int ptr_size, symbolS *end,
+                       symbolS *data);
+static void emit_data(const segT text, int ptr_size);
+
 void dot_fae_end(int s ATTRIBUTE_UNUSED) {
-  long where;
-  char *ptr;
   int ptr_size = stdoutput->arch_info->bits_per_address /
                  stdoutput->arch_info->bits_per_byte;
 
@@ -155,7 +183,7 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   if (unwind.done) {
     as_bad(_("Duplicate fae_end directive"));
   }
-  if (!unwind.unwinder){
+  if (!unwind.unwinder) {
     as_bad(_("No unwind routine specified!"));
   }
 
@@ -163,44 +191,41 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   demand_empty_rest_of_line();
 
   segT text = now_seg;
-  int subseg = now_subseg;  
+  subsegT subseg = now_subseg;
 
-  start_unwind_section(text);
+  emit_data(text, ptr_size);
+  emit_table(text, ptr_size, proc_end, expr_build_dot());
   symbolS *unwind_begin = expr_build_dot();
 
-  int len = ptr_size * 5;
-  ptr = frag_more(len);
-  where = 0;
-
-  int type = reloc_type(ptr_size);
-
-  memset(ptr, 0, len);
-  fix_new(frag_now, where, ptr_size, unwind.proc_start, 0, 0, type);
-  where += ptr_size;
-  fix_new(frag_now, where, ptr_size, proc_end, 0, 0, type);
-  where += ptr_size; 
-  memcpy(ptr + where, &unwind.stack, sizeof(unwind.stack));
-  where += ptr_size;
-  fix_new_exp(frag_now, where, ptr_size, unwind.unwinder, 0, type);
-  where += ptr_size;
-  
-  if (unwind.personality_data) {
-    fix_new(frag_now, where, ptr_size, unwind.personality_data, 0, 0, type);
-    where += ptr_size;
-  }
-
-  if(where > len){
-    as_bad(_("Internal faegen allocation error"));
-  }
-  
-  /* Restore the original section. This is definitely not how you're supposed to do it, but
-   * for some reason on ffunction-sections, set_subseg() sets it to .text instead of .text.function
-   * Todo investigate how that's supposed to work */
-  now_seg = text;
-  now_subseg = subseg;
+  // Restore the original section.
+  subseg_set(text, subseg);
 
   // indicate to linker script that function depends on section
   fix_new(frag_now, 0, 0, unwind_begin, 0, 0, BFD_RELOC_NONE);
 
   unwind.done = 1;
+}
+
+void emit_table(const segT text, int ptr_size, symbolS *end, symbolS *data) {
+  start_table_section(text);
+  frag_more(3 * ptr_size);
+  const int type = reloc_type(ptr_size);
+
+  fix_new(frag_now, 0, ptr_size, unwind.proc_start, 0, 0, type);
+  fix_new(frag_now, ptr_size, ptr_size, end, 0, 0, type);
+  fix_new(frag_now, ptr_size * 2, ptr_size, data, 0, 0, type);
+}
+
+void emit_data(const segT t, int ptr_size) {
+  start_data_section(t);
+  char *ptr = frag_more(3 * ptr_size);
+  const int type = reloc_type(ptr_size);
+
+  memcpy(ptr, &unwind.stack, sizeof(unwind.stack));
+  fix_new_exp(frag_now, ptr_size, ptr_size, unwind.unwinder, 0, type);
+
+  if (unwind.personality_data) {
+    fix_new(frag_now, ptr_size * 2, ptr_size, unwind.personality_data, 0, 0,
+            type);
+  }
 }
