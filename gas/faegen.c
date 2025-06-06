@@ -99,45 +99,18 @@ void dot_fae_save_sp(int s ATTRIBUTE_UNUSED) {
   unwind.stack |= 1 << 31; // todo make this architecture-generic
 }
 
-static void start_table_section(const segT text_seg) {
+static void start_section(const segT text_seg, const char* prefix, const char* once) {
   const char *text_name;
-  const char *prefix;
   struct elf_section_match match;
   char *sec_name;
   int flags;
   int linkonce = 0;
   text_name = segment_name(text_seg);
-  prefix = FAE_TBL_SECTION;
   if (strcmp(text_name, ".text") == 0)
     text_name = "";
 
   if (startswith(text_name, ".gnu.linkonce.t.")) {
-    prefix = FAE_TBL_SECTION_ONCE;
-    text_name += strlen(".gnu.linkonce.t.");
-  }
-
-  sec_name = concat(prefix, text_name, (char *)NULL);
-
-  flags = SHF_ALLOC;
-  memset(&match, 0, sizeof(match));
-
-  obj_elf_change_section(sec_name, SHT_PROGBITS, flags, 0, &match, linkonce);
-}
-
-static void start_data_section(const segT text_seg) {
-  const char *text_name;
-  const char *prefix;
-  struct elf_section_match match;
-  char *sec_name;
-  int flags;
-  int linkonce = 0;
-  text_name = segment_name(text_seg);
-  prefix = FAE_DATA_SECTION;
-  if (strcmp(text_name, ".text") == 0)
-    text_name = "";
-
-  if (startswith(text_name, ".gnu.linkonce.t.")) {
-    prefix = FAE_DATA_SECTION_ONCE;
+    prefix = once;
     text_name += strlen(".gnu.linkonce.t.");
   }
 
@@ -171,7 +144,7 @@ static int reloc_type(int ptr_size) {
 
 static void emit_table(const segT text, int ptr_size, symbolS *end,
                        symbolS *data);
-static void emit_data(const segT text, int ptr_size);
+static symbolS* emit_data(const segT text, int ptr_size);
 
 void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   int ptr_size = stdoutput->arch_info->bits_per_address /
@@ -193,8 +166,8 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   segT text = now_seg;
   subsegT subseg = now_subseg;
 
-  emit_data(text, ptr_size);
-  emit_table(text, ptr_size, proc_end, expr_build_dot());
+  symbolS* data = emit_data(text, ptr_size);
+  emit_table(text, ptr_size, proc_end, data);
   symbolS *unwind_begin = expr_build_dot();
 
   // Restore the original section.
@@ -207,19 +180,19 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
 }
 
 void emit_table(const segT text, int ptr_size, symbolS *end, symbolS *data) {
-  start_table_section(text);
+  start_section(text, FAE_TBL_SECTION, FAE_TBL_SECTION_ONCE);
   frag_more(3 * ptr_size);
   const int type = reloc_type(ptr_size);
-
-  fix_new(frag_now, 0, ptr_size, unwind.proc_start, 0, 0, type);
+  fix_new(frag_now /* frag */, 0 /* offset */, ptr_size /* size */, unwind.proc_start/*symbol*/, 0/*offset*/, 0, type);
   fix_new(frag_now, ptr_size, ptr_size, end, 0, 0, type);
   fix_new(frag_now, ptr_size * 2, ptr_size, data, 0, 0, type);
 }
 
-void emit_data(const segT t, int ptr_size) {
-  start_data_section(t);
+symbolS* emit_data(const segT t, int ptr_size) {
+  start_section(t, FAE_DATA_SECTION, FAE_DATA_SECTION_ONCE);
+  symbolS* table = expr_build_dot();
   char *ptr = frag_more(3 * ptr_size);
-  const int type = reloc_type(ptr_size);
+  const int type = reloc_type(ptr_size); 
 
   memcpy(ptr, &unwind.stack, sizeof(unwind.stack));
   fix_new_exp(frag_now, ptr_size, ptr_size, unwind.unwinder, 0, type);
@@ -228,4 +201,5 @@ void emit_data(const segT t, int ptr_size) {
     fix_new(frag_now, ptr_size * 2, ptr_size, unwind.personality_data, 0, 0,
             type);
   }
+  return table;
 }
