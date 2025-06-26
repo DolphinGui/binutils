@@ -619,9 +619,11 @@ cat <<EOF
   ${TEXT_PLT+${PLT_NEXT_DATA+${PLT} ${OTHER_PLT_SECTIONS}}}
 
   /* For the FAE exception mechanism data  */
-  .fae.idx      ${RELOCATING-0} : { *(.fae.idx) *(.fae.idx.*) }
-  .fae.data     ${RELOCATING-0} : { *(.fae.data) *(.fae.data.*) }
-  .fae.lsda     ${RELOCATING-0} : { *(.fae.lsda) *(.fae.lsda.*) }
+  
+  .fae.idx      ${RELOCATING-0} : ONLY_IF_RO  { __fae_table_start = . ; *(.fae.idx) *(.fae.idx.*) __fae_table_stop = . ; }
+  
+  .fae.data     ${RELOCATING-0} : ONLY_IF_RO { *(.fae.data) *(.fae.data.*) }
+  .fae.lsda     ${RELOCATING-0} : ONLY_IF_RO { *(.fae.lsda) *(.fae.lsda.*) }
 
   ${RELOCATING+${ETEXT_LAST_IN_RODATA_SEGMENT+PROVIDE (__${ETEXT_NAME} = .);}}
   ${RELOCATING+${ETEXT_LAST_IN_RODATA_SEGMENT+PROVIDE (_${ETEXT_NAME} = .);}}

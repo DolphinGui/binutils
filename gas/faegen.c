@@ -182,23 +182,26 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
 void emit_table(const segT text, int ptr_size, symbolS *end, symbolS *data) {
   start_section(text, FAE_TBL_SECTION, FAE_TBL_SECTION_ONCE);
   frag_more(3 * ptr_size);
+  long where = frag_now_fix() - 3 * ptr_size;
   const int type = reloc_type(ptr_size);
-  fix_new(frag_now /* frag */, 0 /* offset */, ptr_size /* size */, unwind.proc_start/*symbol*/, 0/*offset*/, 0, type);
-  fix_new(frag_now, ptr_size, ptr_size, end, 0, 0, type);
-  fix_new(frag_now, ptr_size * 2, ptr_size, data, 0, 0, type);
+ 
+  fix_new(frag_now /* frag */, where /* offset */, ptr_size /* size */, unwind.proc_start/*symbol*/, 0/*offset*/, 0, type);
+  fix_new(frag_now, ptr_size + where, ptr_size, end, 0, 0, type);
+  fix_new(frag_now, ptr_size * 2 + where, ptr_size, data, 0, 0, type);
 }
 
 symbolS* emit_data(const segT t, int ptr_size) {
   start_section(t, FAE_DATA_SECTION, FAE_DATA_SECTION_ONCE);
   symbolS* table = expr_build_dot();
   char *ptr = frag_more(3 * ptr_size);
+  long where = frag_now_fix() - 3 * ptr_size;
   const int type = reloc_type(ptr_size); 
 
   memcpy(ptr, &unwind.stack, sizeof(unwind.stack));
-  fix_new_exp(frag_now, ptr_size, ptr_size, unwind.unwinder, 0, type);
+  fix_new_exp(frag_now, ptr_size + where, ptr_size, unwind.unwinder, 0, type);
 
   if (unwind.personality_data) {
-    fix_new(frag_now, ptr_size * 2, ptr_size, unwind.personality_data, 0, 0,
+    fix_new(frag_now, ptr_size * 2 + where, ptr_size, unwind.personality_data, 0, 0,
             type);
   }
   return table;
