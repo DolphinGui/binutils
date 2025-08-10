@@ -479,11 +479,26 @@ walk_wild_section_match (lang_wild_statement_type *ptr,
 	      && spec_match (&sec->spec, sname) != 0)
 	    continue;
 
-	  /* Don't process sections from files which were excluded.  */
-	  if (!walk_wild_file_in_exclude_list (sec->spec.exclude_name_list,
-					       file))
-	    add_matching_section (ptr, sec, s, file);
-	}
+          unsigned long size_filter = sec->spec.size_filter;
+          if (size_filter != 0) {
+            if (size_filter < s->size)
+              continue;
+            if ((size_filter & (size_filter - 1)) != 0)
+              einfo(_("%F%P: Size filter %x is not a power of 2\n"),
+                    size_filter);
+            unsigned long alignment = 1 << s->alignment_power;
+            // this is kind of stupid, but works for filter values
+            // with powers of 2
+            while (alignment < size_filter) {
+              s->alignment_power++;
+              alignment = 1 << s->alignment_power;
+            }
+          }
+          /* Don't process sections from files which were excluded.  */
+          if (!walk_wild_file_in_exclude_list(sec->spec.exclude_name_list,
+                                              file))
+            add_matching_section(ptr, sec, s, file);
+        }
     }
 }
 
@@ -5183,7 +5198,10 @@ print_wild_statement (lang_wild_statement_type *w,
   for (sec = w->section_list; sec; sec = sec->next)
     {
       int closing_paren = 0;
-
+      if(sec->spec.size_filter != 0){
+        minfo("FILTER_BY_SIZE(");
+        closing_paren = 1;
+      }
       switch (sec->spec.sorted)
 	{
 	case none:

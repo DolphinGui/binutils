@@ -104,6 +104,7 @@ struct wildcard_spec
   size_t              suffixlen;
   sort_type           sorted;
   bool                reversed;
+  size_t              size_filter;
 };
 
 struct wildcard_list

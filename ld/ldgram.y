@@ -132,7 +132,7 @@ static void yyerror (const char *);
 %token SECTIONS PHDRS INSERT_K AFTER BEFORE LINKER_VERSION
 %token DATA_SEGMENT_ALIGN DATA_SEGMENT_RELRO_END DATA_SEGMENT_END
 %token SORT_BY_NAME SORT_BY_ALIGNMENT SORT_NONE
-%token SORT_BY_INIT_PRIORITY REVERSE
+%token SORT_BY_INIT_PRIORITY REVERSE FILTER_BY_SIZE
 %token '{' '}'
 %token SIZEOF_HEADERS OUTPUT_FORMAT FORCE_COMMON_ALLOCATION OUTPUT_ARCH
 %token INHIBIT_COMMON_ALLOCATION FORCE_GROUP_ALLOCATION
@@ -481,6 +481,17 @@ filename_spec:
 			  $$.sorted = by_name;
 			  $$.reversed = true;
 			}
+	|	FILTER_BY_SIZE '(' INT ',' wildcard_maybe_reverse ')'
+			{
+  			  $$ = $5;
+  			  $$.size_filter = $3.integer;
+			}
+	|	FILTER_BY_SIZE '(' INT ',' SORT_BY_NAME '(' wildcard_maybe_reverse ')' ')'
+			{
+  			  $$ = $7;
+  			  $$.size_filter = $3.integer;
+  			  $$.sorted = by_name;
+			}
 	;
 
 section_name_spec:
@@ -536,6 +547,18 @@ section_name_spec:
 			  $$ = $5;
 			  $$.sorted = by_init_priority;
 			  $$.reversed = true;
+			}
+	|	FILTER_BY_SIZE '(' wildcard_maybe_reverse ')'
+			{
+  			  printf("filtered by size\n");
+  			  $$ = $3;
+  			  $$.size_filter = 128;
+			}
+	|	FILTER_BY_SIZE '('  SORT_BY_NAME '(' wildcard_maybe_reverse ')' ')'
+			{
+  			  $$ = $5;
+  			  $$.size_filter = 128;
+  			  $$.sorted = by_name;
 			}
 	;
 
