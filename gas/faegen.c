@@ -6,10 +6,12 @@
 
 typedef struct {
   symbolS *proc_start;
-  expressionS *unwinder;
+  symbolS *unwinder;
   symbolS *personality_data;
-  unsigned int stack;
-  int done;
+  expressionS *size;
+  size_t stack;
+  size_t registers;
+  char done;
   char dynamic_stack;
 } _unwind;
 
@@ -21,6 +23,7 @@ static void dot_fae_handlerdata(int);
 static void dot_fae_end(int);
 static void dot_fae_stacksize(int);
 static void dot_fae_save_sp(int);
+static void dot_fae_fsize(int);
 
 const pseudo_typeS fae_pseudo_table[] = {
     {"fae_start", dot_fae_start, 0},
@@ -29,6 +32,7 @@ const pseudo_typeS fae_pseudo_table[] = {
     {"fae_handlerdata", dot_fae_handlerdata, 0},
     {"fae_stacksize", dot_fae_stacksize, 0},
     {"fae_save_sp", dot_fae_save_sp, 0},
+    {"fae_fsize", dot_fae_fsize, 0},
     {NULL, 0, 0}};
 
 void dot_fae_start(int s ATTRIBUTE_UNUSED) {
@@ -48,13 +52,27 @@ static void check_proc(void) {
   }
 }
 
+static int immediate_for_directive(size_t *val);
+
+static void expect_seperator(void) {
+  SKIP_WHITESPACE();
+  if (*input_line_pointer == ',')
+    input_line_pointer++;
+  else
+    as_bad(_("missing separator"));
+}
+
 // TODO: make unwinder accept offset so registers_allocated can be removed
 void dot_fae_unwinder(int s ATTRIBUTE_UNUSED) {
   check_proc();
   if (unwind.unwinder)
     as_bad(_("Duplicate .fae_unwinder directive"));
-  unwind.unwinder = XNEW(struct expressionS);
-  do_parse_cons_expression(unwind.unwinder, 4);
+  char *symbol;
+  char c = get_symbol_name(&symbol);
+  unwind.unwinder = symbol_find_or_make(symbol);
+  restore_line_pointer(c);
+  expect_seperator();
+  immediate_for_directive(&unwind.registers);
 }
 
 void dot_fae_handlerdata(int s ATTRIBUTE_UNUSED) {
@@ -66,14 +84,15 @@ void dot_fae_handlerdata(int s ATTRIBUTE_UNUSED) {
 }
 
 // stolen from tc-arm, might be better to move somewhere else
-static int immediate_for_directive(unsigned *val) {
+// TODO: Fix to allow for different sizes by just returning expressionS*
+static int immediate_for_directive(size_t *val) {
   expressionS exp;
   exp.X_op = O_illegal;
 
-  expression(&exp);
+  expression_and_evaluate(&exp);
 
   if (exp.X_op != O_constant) {
-    as_bad(_("expected a constant"));
+    as_bad(_("expected a constant, got %d"), exp.X_op);
     ignore_rest_of_line();
     return -1;
   }
@@ -90,24 +109,36 @@ void dot_fae_stacksize(int s ATTRIBUTE_UNUSED) {
   immediate_for_directive(&unwind.stack);
 }
 
+void dot_fae_fsize(int s ATTRIBUTE_UNUSED) {
+  check_proc();
+  if (unwind.dynamic_stack)
+    as_bad(_("Cannot set stack size for function with dynamic stack"));
+  unwind.size = XNEW(struct expressionS);
+  expression(unwind.size);
+}
+
 void dot_fae_save_sp(int s ATTRIBUTE_UNUSED) {
   check_proc();
   if (unwind.stack != 0)
     as_bad(
         _("Cannot set stack pointer register for function with fixed stack"));
   immediate_for_directive(&unwind.stack);
-  unwind.stack |= 1 << 31; // todo make this architecture-generic
+  unwind.stack = 6 | ((size_t)1 << 63); // todo make this architecture-generic
 }
 
-static void start_section(const segT text_seg, const char* prefix, const char* once) {
+static int start_section(const segT text_seg, const char *prefix,
+                         const char *once) {
   const char *text_name;
   struct elf_section_match match;
   char *sec_name;
   int flags;
   int linkonce = 0;
+  int is_sorted = 1;
   text_name = segment_name(text_seg);
-  if (strcmp(text_name, ".text") == 0)
+  if (strcmp(text_name, ".text") == 0) {
     text_name = "";
+    is_sorted = 0;
+  }
 
   if (startswith(text_name, ".gnu.linkonce.t.")) {
     prefix = once;
@@ -119,7 +150,12 @@ static void start_section(const segT text_seg, const char* prefix, const char* o
   flags = SHF_ALLOC;
   memset(&match, 0, sizeof(match));
 
+  /*
+   * This is kinda bad, and realistically this should either be rewritten to be
+   * format agnostic, or be put into config.
+   */
   obj_elf_change_section(sec_name, SHT_PROGBITS, flags, 0, &match, linkonce);
+  return is_sorted;
 }
 
 static int reloc_type(int ptr_size) {
@@ -144,7 +180,9 @@ static int reloc_type(int ptr_size) {
 
 static void emit_table(const segT text, int ptr_size, symbolS *end,
                        symbolS *data);
-static symbolS* emit_data(const segT text, int ptr_size);
+static symbolS *emit_data(const segT text, int ptr_size);
+
+static void emit_size(const segT text, int ptr_size);
 
 void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   int ptr_size = stdoutput->arch_info->bits_per_address /
@@ -166,7 +204,9 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
   segT text = now_seg;
   subsegT subseg = now_subseg;
 
-  symbolS* data = emit_data(text, ptr_size);
+  emit_size(text, ptr_size);
+
+  symbolS *data = emit_data(text, ptr_size);
   emit_table(text, ptr_size, proc_end, data);
   symbolS *unwind_begin = expr_build_dot();
 
@@ -180,29 +220,49 @@ void dot_fae_end(int s ATTRIBUTE_UNUSED) {
 }
 
 void emit_table(const segT text, int ptr_size, symbolS *end, symbolS *data) {
-  start_section(text, FAE_TBL_SECTION, FAE_TBL_SECTION_ONCE);
-  frag_more(3 * ptr_size);
-  long where = frag_now_fix() - 3 * ptr_size;
+  int is_sorted = start_section(text, FAE_TBL_SECTION, FAE_TBL_SECTION_ONCE);
+  long where = frag_now_fix();
+  long size = is_sorted ? ptr_size : 3 * ptr_size;
+  char* ptr = frag_more(size);
+  memset(ptr, 0, ptr_size * size);
   const int type = reloc_type(ptr_size);
- 
-  fix_new(frag_now /* frag */, where /* offset */, ptr_size /* size */, unwind.proc_start/*symbol*/, 0/*offset*/, 0, type);
-  fix_new(frag_now, ptr_size + where, ptr_size, end, 0, 0, type);
-  fix_new(frag_now, ptr_size * 2 + where, ptr_size, data, 0, 0, type);
+
+  fix_new(frag_now /* frag */, where /* offset */, ptr_size /* size */,
+          unwind.proc_start /*symbol*/, 0 /*offset*/, 0, type);
+  if (!is_sorted) {
+    fix_new(frag_now, ptr_size + where, ptr_size, end, 0, 0, type);
+    fix_new(frag_now, ptr_size * 2 + where, ptr_size, data, 0, 0, type);
+  } else {
+    // indicate to gc that this points to the data, even if it's not obvious
+    fix_new(frag_now, where, 0, data, 0, 0, BFD_RELOC_NONE);
+  }
 }
 
-symbolS* emit_data(const segT t, int ptr_size) {
+symbolS *emit_data(const segT t, int ptr_size) {
   start_section(t, FAE_DATA_SECTION, FAE_DATA_SECTION_ONCE);
-  symbolS* table = expr_build_dot();
-  char *ptr = frag_more(3 * ptr_size);
-  long where = frag_now_fix() - 3 * ptr_size;
-  const int type = reloc_type(ptr_size); 
+  symbolS *table = expr_build_dot();
+  long where = frag_now_fix();
+  char *ptr = frag_more(4 * ptr_size);
+  memset(ptr, 0, ptr_size * 4);
+  const int type = reloc_type(ptr_size);
 
-  memcpy(ptr, &unwind.stack, sizeof(unwind.stack));
-  fix_new_exp(frag_now, ptr_size + where, ptr_size, unwind.unwinder, 0, type);
+  memcpy(ptr, &unwind.stack, ptr_size);
+  memcpy(ptr + ptr_size, &unwind.registers, ptr_size);
+  fix_new(frag_now, ptr_size * 2 + where, ptr_size, unwind.unwinder, 0, 0,
+          type);
 
   if (unwind.personality_data) {
-    fix_new(frag_now, ptr_size * 2 + where, ptr_size, unwind.personality_data, 0, 0,
-            type);
+    fix_new(frag_now, ptr_size * 3 + where, ptr_size, unwind.personality_data,
+            0, 0, type);
   }
   return table;
+}
+
+void emit_size(const segT t, int ptr_size) {
+  if (!unwind.size)
+    return;
+  start_section(t, FAE_SIZE_SECTION, FAE_SIZE_SECTION_ONCE);
+  frag_more(ptr_size);
+  const int type = reloc_type(ptr_size);
+  fix_new_exp(frag_now, 0, ptr_size, unwind.size, 0, type);
 }

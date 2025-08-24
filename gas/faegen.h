@@ -34,6 +34,9 @@ extern void fae_finish (void);
 #define FAE_DATA_SECTION ".fae.data"
 #define FAE_DATA_SECTION_ONCE ".fae.data"
 
+#define FAE_SIZE_SECTION ".fae.size"
+#define FAE_SIZE_SECTION_ONCE ".fae.size"
+
 // define FAE_PTR_RELOC_TYPE to specify a relocation type for function pointers
 
 #endif
