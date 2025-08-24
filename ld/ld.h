@@ -92,6 +92,11 @@ typedef enum
   by_none, by_init_priority
 } sort_type;
 
+typedef enum
+{
+  no_filter, size_filter, info_filter
+} filter_type;
+
 extern sort_type sort_section;
 
 struct wildcard_spec
@@ -104,7 +109,8 @@ struct wildcard_spec
   size_t              suffixlen;
   sort_type           sorted;
   bool                reversed;
-  size_t              size_filter;
+  size_t              filter_value;
+  filter_type         filter;
 };
 
 struct wildcard_list

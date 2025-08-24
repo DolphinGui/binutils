@@ -479,9 +479,21 @@ walk_wild_section_match (lang_wild_statement_type *ptr,
 	      && spec_match (&sec->spec, sname) != 0)
 	    continue;
 
-          unsigned long size_filter = sec->spec.size_filter;
-          if (size_filter != 0) {
-            if (size_filter < s->size)
+          if (sec->spec.filter != no_filter) {
+            size_t filter = sec->spec.filter_value;
+            size_t value = 0;
+            switch (sec->spec.filter) {
+            case size_filter:
+              value = s->size;
+              break;
+            case info_filter:
+            // this is not portable to other formats, but I need to smuggle
+            // it in somehow
+              value = elf_section_data(s)->this_hdr.sh_info;
+              break;
+            case no_filter: value = 0;
+            }
+            if (filter < value)
               continue;
             if ((size_filter & (size_filter - 1)) != 0)
               einfo(_("%F%P: Size filter %x is not a power of 2\n"),
@@ -5198,8 +5210,11 @@ print_wild_statement (lang_wild_statement_type *w,
   for (sec = w->section_list; sec; sec = sec->next)
     {
       int closing_paren = 0;
-      if(sec->spec.size_filter != 0){
+      if(sec->spec.filter == size_filter){
         minfo("FILTER_BY_SIZE(");
+        closing_paren = 1;
+      }else if(sec->spec.filter == info_filter){
+        minfo("FILTER_BY_PROXY(");
         closing_paren = 1;
       }
       switch (sec->spec.sorted)

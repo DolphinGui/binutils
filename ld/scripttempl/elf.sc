@@ -553,6 +553,8 @@ cat <<EOF
   .text         ${RELOCATING-0} :
   {
     ${RELOCATING+${TEXT_START_SYMBOLS}}
+    ${RELOCATING+*(SORT(.text.uw.*))}
+    __fae_sorted_function_end = . ;
     ${RELOCATING+*(.text.unlikely .text.*_unlikely .text.unlikely.*)}
     ${RELOCATING+*(.text.exit .text.exit.*)}
     ${RELOCATING+*(.text.startup .text.startup.*)}
@@ -620,10 +622,25 @@ cat <<EOF
 
   /* For the FAE exception mechanism data  */
   
-  .fae.idx      ${RELOCATING-0} : ONLY_IF_RO  { __fae_table_start = . ; *(.fae.idx) *(.fae.idx.*) __fae_table_stop = . ; }
-  
-  .fae.data     ${RELOCATING-0} : ONLY_IF_RO { *(.fae.data) *(.fae.data.*) }
-  .fae.lsda     ${RELOCATING-0} : ONLY_IF_RO { *(.fae.lsda) *(.fae.lsda.*) }
+  .fae.idx      ${RELOCATING-0} : ONLY_IF_RO  {
+    __fae_unsorted_start = . ;
+    *(SORT(.fae.idx))
+    __fae_unsorted_end = . ;
+    __fae_table_start = . ;
+    *(SORT(.fae.idx.*))
+    __fae_table_end = . ;
+  }
+
+  .fae.data     ${RELOCATING-0} : ONLY_IF_RO {
+    *(SORT(.fae.data))
+    __fae_data_start = . ;
+    *(SORT(.fae.data.*))
+    __fae_data_end = . ;
+  }
+  .fae.lsda     ${RELOCATING-0} : ONLY_IF_RO {
+    *(SORT(.fae.lsda))
+    *(SORT(.fae.lsda.*))
+  }
 
   ${RELOCATING+${ETEXT_LAST_IN_RODATA_SEGMENT+PROVIDE (__${ETEXT_NAME} = .);}}
   ${RELOCATING+${ETEXT_LAST_IN_RODATA_SEGMENT+PROVIDE (_${ETEXT_NAME} = .);}}
